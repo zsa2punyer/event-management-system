@@ -8,6 +8,9 @@ const STORAGE_KEYS = {
   attendance: 'eventManagement_attendance',
 };
 
+const GOOGLE_SHEETS_API_URL = 'https://script.google.com/macros/s/AKfycbzY3HKZifSPz2GLt6fJpv3HZJdPIEl8bTHN9SCmgCkg3EUORUKXWfFso-tiKkdd9cVt/exec';
+const API_ENTITY_BY_KEY = Object.fromEntries(Object.entries(STORAGE_KEYS).map(([entity, key]) => [key, entity]));
+
 const app = document.querySelector('#app');
 
 function getAuthState() {
@@ -32,7 +35,57 @@ function readCollection(key) {
 }
 
 function writeCollection(key, value) {
+  const previous = readCollection(key);
   localStorage.setItem(key, JSON.stringify(value));
+  syncCollectionMutation(key, previous, value);
+}
+
+async function apiRequest(options) {
+  const headers = options.method === 'GET' ? (options.headers || {}) : { 'Content-Type': 'application/json', ...(options.headers || {}) };
+  const response = await fetch(options.url || GOOGLE_SHEETS_API_URL, {
+    ...options,
+    headers,
+  });
+  const result = await response.json();
+  if (!result.ok) throw new Error(result.error || 'Google Sheets request failed');
+  return result.data;
+}
+
+async function syncCollectionMutation(key, previous, next) {
+  const entity = API_ENTITY_BY_KEY[key];
+  if (!entity) return;
+  const idField = `${entity.slice(0, -1)}Id`;
+  const oldById = new Map(previous.map((record) => [record[idField], record]));
+  const newById = new Map(next.map((record) => [record[idField], record]));
+
+  for (const record of next) {
+    const oldRecord = oldById.get(record[idField]);
+    if (!oldRecord) {
+      apiRequest({ method: 'POST', body: JSON.stringify({ action: 'create', entity, record }) }).catch(() => {});
+    } else if (JSON.stringify(oldRecord) !== JSON.stringify(record)) {
+      apiRequest({ method: 'POST', body: JSON.stringify({ action: 'update', entity, id: record[idField], record }) }).catch(() => {});
+    }
+  }
+  for (const record of previous) {
+    if (!newById.has(record[idField])) {
+      apiRequest({ method: 'POST', body: JSON.stringify({ action: 'delete', entity, id: record[idField] }) }).catch(() => {});
+    }
+  }
+}
+
+async function syncFromGoogleSheets() {
+  await Promise.all(Object.keys(STORAGE_KEYS).filter((entity) => entity !== 'users').map(loadGoogleCollection));
+}
+
+async function loadGoogleCollection(entity) {
+  try {
+    const records = await apiRequest({ method: 'GET', url: `${GOOGLE_SHEETS_API_URL}?entity=${entity}`, headers: {} });
+    if (Array.isArray(records) && (records.length > 0 || !localStorage.getItem(STORAGE_KEYS[entity]))) {
+      localStorage.setItem(STORAGE_KEYS[entity], JSON.stringify(records));
+    }
+  } catch {
+    // localStorage remains the fallback when the API is unavailable.
+  }
 }
 
 function seedApplicationData() {
@@ -513,8 +566,11 @@ function renderProtectedApp() {
   });
 }
 
-if (getAuthState().isAuthenticated) {
-  renderProtectedApp();
-} else {
-  renderLogin();
+async function bootstrap() {
+  await syncFromGoogleSheets();
+  seedApplicationData();
+  if (getAuthState().isAuthenticated) renderProtectedApp();
+  else renderLogin();
 }
+
+bootstrap();
