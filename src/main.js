@@ -34,10 +34,11 @@ function readCollection(key) {
   }
 }
 
-function writeCollection(key, value) {
+function writeCollection(key, value, options = {}) {
   const previous = readCollection(key);
   localStorage.setItem(key, JSON.stringify(value));
-  syncCollectionMutation(key, previous, value);
+  const request = syncCollectionMutation(key, previous, value);
+  return options.reportError ? request : request.catch(() => null);
 }
 
 async function apiRequest(options) {
@@ -58,19 +59,21 @@ async function syncCollectionMutation(key, previous, next) {
   const oldById = new Map(previous.map((record) => [record[idField], record]));
   const newById = new Map(next.map((record) => [record[idField], record]));
 
+  const requests = [];
   for (const record of next) {
     const oldRecord = oldById.get(record[idField]);
     if (!oldRecord) {
-      apiRequest({ method: 'POST', body: JSON.stringify({ action: 'create', entity, record }) }).catch(() => {});
+      requests.push(apiRequest({ method: 'POST', body: JSON.stringify({ action: 'create', entity, record }) }));
     } else if (JSON.stringify(oldRecord) !== JSON.stringify(record)) {
-      apiRequest({ method: 'POST', body: JSON.stringify({ action: 'update', entity, id: record[idField], record }) }).catch(() => {});
+      requests.push(apiRequest({ method: 'POST', body: JSON.stringify({ action: 'update', entity, id: record[idField], record }) }));
     }
   }
   for (const record of previous) {
     if (!newById.has(record[idField])) {
-      apiRequest({ method: 'POST', body: JSON.stringify({ action: 'delete', entity, id: record[idField] }) }).catch(() => {});
+      requests.push(apiRequest({ method: 'POST', body: JSON.stringify({ action: 'delete', entity, id: record[idField] }) }));
     }
   }
+  await Promise.all(requests);
 }
 
 async function syncFromGoogleSheets() {
@@ -349,7 +352,7 @@ function renderRegistrationsPage() {
       setAuthState({ isAuthenticated: false, userId: null, username: null, role: null });
       renderLogin();
     });
-    document.querySelector('#registration-form').addEventListener('submit', (event) => {
+    document.querySelector('#registration-form').addEventListener('submit', async (event) => {
       event.preventDefault();
       const eventId = document.querySelector('#registration-event').value;
       const participantId = document.querySelector('#registration-participant').value;
@@ -370,10 +373,18 @@ function renderRegistrationsPage() {
         message = 'Event capacity has been reached.';
         messageType = 'error';
       } else {
-        registrations.push({ registrationId: `registration_${String(registrations.length + 1).padStart(3, '0')}`, eventId, participantId, registrationDate: new Date().toISOString().slice(0, 10), status: 'Registered' });
-        writeCollection(STORAGE_KEYS.registrations, registrations);
-        message = 'Registration created successfully.';
-        messageType = 'success';
+        const registration = { registrationId: `registration_${String(registrations.length + 1).padStart(3, '0')}`, eventId, participantId, registrationDate: new Date().toISOString().slice(0, 10), status: 'Registered' };
+        registrations.push(registration);
+        try {
+          await writeCollection(STORAGE_KEYS.registrations, registrations, { reportError: true });
+          message = 'Registration created successfully.';
+          messageType = 'success';
+        } catch (error) {
+          registrations.pop();
+          writeCollection(STORAGE_KEYS.registrations, registrations);
+          message = error.message;
+          messageType = 'error';
+        }
       }
       drawRegistrations();
     });
@@ -426,15 +437,19 @@ function renderAttendancePage() {
     document.querySelector('#registrations-button').addEventListener('click', renderRegistrationsPage);
     document.querySelector('#logout-button').addEventListener('click', () => { setAuthState({ isAuthenticated: false, userId: null, username: null, role: null }); renderLogin(); });
     document.querySelector('#attendance-event').addEventListener('change', (event) => { selectedEventId = event.target.value; message = ''; drawAttendance(); });
-    document.querySelectorAll('.attendance-button').forEach((button) => button.addEventListener('click', () => {
+    document.querySelectorAll('.attendance-button').forEach((button) => button.addEventListener('click', async () => {
       const participantId = button.dataset.participantId;
       const status = button.dataset.status;
       const currentAttendance = readCollection(STORAGE_KEYS.attendance);
       const existingIndex = currentAttendance.findIndex((item) => item.eventId === selectedEventId && item.participantId === participantId);
       const record = { attendanceId: existingIndex >= 0 ? currentAttendance[existingIndex].attendanceId : `attendance_${String(currentAttendance.length + 1).padStart(3, '0')}`, eventId: selectedEventId, participantId, status };
       if (existingIndex >= 0) currentAttendance[existingIndex] = record; else currentAttendance.push(record);
-      writeCollection(STORAGE_KEYS.attendance, currentAttendance);
-      message = 'Attendance saved successfully.';
+      try {
+        await writeCollection(STORAGE_KEYS.attendance, currentAttendance, { reportError: true });
+        message = 'Attendance saved successfully.';
+      } catch (error) {
+        message = error.message;
+      }
       drawAttendance();
     }));
   }
