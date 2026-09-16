@@ -81,7 +81,10 @@ async function loadGoogleCollection(entity) {
   try {
     const records = await apiRequest({ method: 'GET', url: `${GOOGLE_SHEETS_API_URL}?entity=${entity}`, headers: {} });
     if (Array.isArray(records) && (records.length > 0 || !localStorage.getItem(STORAGE_KEYS[entity]))) {
-      localStorage.setItem(STORAGE_KEYS[entity], JSON.stringify(records));
+      const normalizedRecords = entity === 'events'
+        ? records.map((record) => ({ ...record, date: String(record.date ?? '').slice(0, 10) }))
+        : records;
+      localStorage.setItem(STORAGE_KEYS[entity], JSON.stringify(normalizedRecords));
     }
   } catch {
     // localStorage remains the fallback when the API is unavailable.
@@ -131,7 +134,10 @@ function seedApplicationData() {
 }
 
 function formatDate(value) {
-  return new Intl.DateTimeFormat('en', { dateStyle: 'medium' }).format(new Date(`${value}T00:00:00`));
+  const rawValue = String(value ?? '');
+  const dateValue = rawValue.includes('T') ? new Date(rawValue) : new Date(`${rawValue}T00:00:00`);
+  if (Number.isNaN(dateValue.getTime())) return '—';
+  return new Intl.DateTimeFormat('en', { dateStyle: 'medium' }).format(dateValue);
 }
 
 function dashboardData() {
