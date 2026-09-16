@@ -42,7 +42,7 @@ function writeCollection(key, value, options = {}) {
 }
 
 async function apiRequest(options) {
-  const headers = options.method === 'GET' ? (options.headers || {}) : { 'Content-Type': 'application/json', ...(options.headers || {}) };
+  const headers = options.method === 'GET' ? (options.headers || {}) : { 'Content-Type': 'text/plain;charset=UTF-8', ...(options.headers || {}) };
   const response = await fetch(options.url || GOOGLE_SHEETS_API_URL, {
     ...options,
     headers,
