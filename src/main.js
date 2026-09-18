@@ -34,11 +34,15 @@ function readCollection(key) {
   }
 }
 
-function writeCollection(key, value, options = {}) {
+async function writeCollection(key, value) {
   const previous = readCollection(key);
+  await syncCollectionMutation(key, previous, value);
   localStorage.setItem(key, JSON.stringify(value));
-  const request = syncCollectionMutation(key, previous, value);
-  return options.reportError ? request : request.catch(() => null);
+  return value;
+}
+
+function seedCollection(key, value) {
+  if (!localStorage.getItem(key)) localStorage.setItem(key, JSON.stringify(value));
 }
 
 async function apiRequest(options) {
@@ -47,6 +51,7 @@ async function apiRequest(options) {
     ...options,
     headers,
   });
+  if (!response.ok) throw new Error(`Google Sheets request failed (${response.status})`);
   const result = await response.json();
   if (!result.ok) throw new Error(result.error || 'Google Sheets request failed');
   return result.data;
@@ -101,7 +106,7 @@ function seedApplicationData() {
   const dateValue = upcomingDate.toISOString().slice(0, 10);
 
   if (!localStorage.getItem(STORAGE_KEYS.events)) {
-    writeCollection(STORAGE_KEYS.events, [{
+    seedCollection(STORAGE_KEYS.events, [{
       eventId: 'event_001',
       eventName: 'Web Development Workshop',
       description: 'Introduction to modern frontend development.',
@@ -114,7 +119,7 @@ function seedApplicationData() {
     }]);
   }
   if (!localStorage.getItem(STORAGE_KEYS.participants)) {
-    writeCollection(STORAGE_KEYS.participants, [{
+    seedCollection(STORAGE_KEYS.participants, [{
       participantId: 'participant_001',
       name: 'Aina Rahman',
       email: 'aina@example.com',
@@ -123,7 +128,7 @@ function seedApplicationData() {
     }]);
   }
   if (!localStorage.getItem(STORAGE_KEYS.registrations)) {
-    writeCollection(STORAGE_KEYS.registrations, [{
+    seedCollection(STORAGE_KEYS.registrations, [{
       registrationId: 'registration_001',
       eventId: 'event_001',
       participantId: 'participant_001',
@@ -132,7 +137,7 @@ function seedApplicationData() {
     }]);
   }
   if (!localStorage.getItem(STORAGE_KEYS.attendance)) {
-    writeCollection(STORAGE_KEYS.attendance, []);
+    seedCollection(STORAGE_KEYS.attendance, []);
   }
 }
 
@@ -219,15 +224,18 @@ function renderEventsPage() {
     if (editingEventId) {
       const target = readCollection(STORAGE_KEYS.events).find((item) => item.eventId === editingEventId);
       if (target) { document.querySelector('#event-edit-name').value = target.eventName; document.querySelector('#event-edit-date').value = target.date; document.querySelector('#event-edit-time').value = target.time; document.querySelector('#event-edit-location').value = target.location; document.querySelector('#event-edit-capacity').value = target.capacity; document.querySelector('#event-edit-status').value = target.status; }
-      document.querySelector('#event-edit-form').addEventListener('submit', (event) => { event.preventDefault(); const allEvents = readCollection(STORAGE_KEYS.events); const form = new FormData(event.currentTarget); const name = String(form.get('name') ?? document.querySelector('#event-edit-name').value).trim(); const date = document.querySelector('#event-edit-date').value; const time = document.querySelector('#event-edit-time').value; const location = document.querySelector('#event-edit-location').value.trim(); const capacity = Number(document.querySelector('#event-edit-capacity').value); if (!name || !date || !time || !location || capacity <= 0) { eventMessage = 'Complete all required event fields and use a positive capacity.'; drawEvents(); return; } const record = { eventId: editingEventId === 'new' ? `event_${String(allEvents.length + 1).padStart(3, '0')}` : editingEventId, eventName: name, description: '', date, time, location, organizer: 'Admin', capacity, status: document.querySelector('#event-edit-status').value }; const index = allEvents.findIndex((item) => item.eventId === editingEventId); if (index >= 0) allEvents[index] = { ...allEvents[index], ...record }; else allEvents.push(record); writeCollection(STORAGE_KEYS.events, allEvents); editingEventId = ''; eventMessage = ''; drawEvents(); });
+      document.querySelector('#event-edit-form').addEventListener('submit', async (event) => { event.preventDefault(); const allEvents = readCollection(STORAGE_KEYS.events); const form = new FormData(event.currentTarget); const name = String(form.get('name') ?? document.querySelector('#event-edit-name').value).trim(); const date = document.querySelector('#event-edit-date').value; const time = document.querySelector('#event-edit-time').value; const location = document.querySelector('#event-edit-location').value.trim(); const capacity = Number(document.querySelector('#event-edit-capacity').value); if (!name || !date || !time || !location || capacity <= 0) { eventMessage = 'Complete all required event fields and use a positive capacity.'; drawEvents(); return; } const record = { eventId: editingEventId === 'new' ? `event_${String(allEvents.length + 1).padStart(3, '0')}` : editingEventId, eventName: name, description: '', date, time, location, organizer: 'Admin', capacity, status: document.querySelector('#event-edit-status').value }; const index = allEvents.findIndex((item) => item.eventId === editingEventId); const nextEvents = [...allEvents]; if (index >= 0) nextEvents[index] = { ...allEvents[index], ...record }; else nextEvents.push(record); try { await writeCollection(STORAGE_KEYS.events, nextEvents); editingEventId = ''; eventMessage = ''; } catch (error) { eventMessage = error.message; } drawEvents(); });
       document.querySelector('#cancel-event-edit').addEventListener('click', () => { editingEventId = ''; drawEvents(); });
     }
-    document.querySelectorAll('.delete-event').forEach((button) => button.addEventListener('click', () => {
+    document.querySelectorAll('.delete-event').forEach((button) => button.addEventListener('click', async () => {
       if (!window.confirm('Delete this event and its registrations and attendance records?')) return;
       const eventId = button.dataset.eventId;
-      writeCollection(STORAGE_KEYS.events, readCollection(STORAGE_KEYS.events).filter((item) => item.eventId !== eventId));
-      writeCollection(STORAGE_KEYS.registrations, readCollection(STORAGE_KEYS.registrations).filter((item) => item.eventId !== eventId));
-      writeCollection(STORAGE_KEYS.attendance, readCollection(STORAGE_KEYS.attendance).filter((item) => item.eventId !== eventId));
+      try {
+        await writeCollection(STORAGE_KEYS.events, readCollection(STORAGE_KEYS.events).filter((item) => item.eventId !== eventId));
+        await writeCollection(STORAGE_KEYS.registrations, readCollection(STORAGE_KEYS.registrations).filter((item) => item.eventId !== eventId));
+        await writeCollection(STORAGE_KEYS.attendance, readCollection(STORAGE_KEYS.attendance).filter((item) => item.eventId !== eventId));
+        eventMessage = '';
+      } catch (error) { eventMessage = error.message; }
       drawEvents();
     }));
   }
@@ -287,15 +295,18 @@ function renderParticipantsPage() {
     if (editingParticipantId) {
       const target = readCollection(STORAGE_KEYS.participants).find((item) => item.participantId === editingParticipantId);
       if (target) { document.querySelector('#participant-edit-name').value = target.name; document.querySelector('#participant-edit-email').value = target.email; document.querySelector('#participant-edit-phone').value = target.phone ?? ''; document.querySelector('#participant-edit-organisation').value = target.organisation ?? ''; }
-      document.querySelector('#participant-edit-form').addEventListener('submit', (event) => { event.preventDefault(); const allParticipants = readCollection(STORAGE_KEYS.participants); const name = document.querySelector('#participant-edit-name').value.trim(); const email = document.querySelector('#participant-edit-email').value.trim(); const duplicate = allParticipants.some((item) => item.email.toLowerCase() === email.toLowerCase() && item.participantId !== editingParticipantId); if (!name || !email.includes('@')) { participantMessage = 'Name and a valid email are required.'; drawParticipants(); return; } if (duplicate) { participantMessage = 'A participant with this email already exists.'; drawParticipants(); return; } const record = { participantId: editingParticipantId === 'new' ? `participant_${String(allParticipants.length + 1).padStart(3, '0')}` : editingParticipantId, name, email, phone: document.querySelector('#participant-edit-phone').value.trim(), organisation: document.querySelector('#participant-edit-organisation').value.trim() }; const index = allParticipants.findIndex((item) => item.participantId === editingParticipantId); if (index >= 0) allParticipants[index] = { ...allParticipants[index], ...record }; else allParticipants.push(record); writeCollection(STORAGE_KEYS.participants, allParticipants); editingParticipantId = ''; participantMessage = ''; drawParticipants(); });
+      document.querySelector('#participant-edit-form').addEventListener('submit', async (event) => { event.preventDefault(); const allParticipants = readCollection(STORAGE_KEYS.participants); const name = document.querySelector('#participant-edit-name').value.trim(); const email = document.querySelector('#participant-edit-email').value.trim(); const duplicate = allParticipants.some((item) => item.email.toLowerCase() === email.toLowerCase() && item.participantId !== editingParticipantId); if (!name || !email.includes('@')) { participantMessage = 'Name and a valid email are required.'; drawParticipants(); return; } if (duplicate) { participantMessage = 'A participant with this email already exists.'; drawParticipants(); return; } const record = { participantId: editingParticipantId === 'new' ? `participant_${String(allParticipants.length + 1).padStart(3, '0')}` : editingParticipantId, name, email, phone: document.querySelector('#participant-edit-phone').value.trim(), organisation: document.querySelector('#participant-edit-organisation').value.trim() }; const index = allParticipants.findIndex((item) => item.participantId === editingParticipantId); const nextParticipants = [...allParticipants]; if (index >= 0) nextParticipants[index] = { ...allParticipants[index], ...record }; else nextParticipants.push(record); try { await writeCollection(STORAGE_KEYS.participants, nextParticipants); editingParticipantId = ''; participantMessage = ''; } catch (error) { participantMessage = error.message; } drawParticipants(); });
       document.querySelector('#cancel-participant-edit').addEventListener('click', () => { editingParticipantId = ''; drawParticipants(); });
     }
-    document.querySelectorAll('.delete-participant').forEach((button) => button.addEventListener('click', () => {
+    document.querySelectorAll('.delete-participant').forEach((button) => button.addEventListener('click', async () => {
       if (!window.confirm('Delete this participant and related registrations and attendance records?')) return;
       const participantId = button.dataset.participantId;
-      writeCollection(STORAGE_KEYS.participants, readCollection(STORAGE_KEYS.participants).filter((item) => item.participantId !== participantId));
-      writeCollection(STORAGE_KEYS.registrations, readCollection(STORAGE_KEYS.registrations).filter((item) => item.participantId !== participantId));
-      writeCollection(STORAGE_KEYS.attendance, readCollection(STORAGE_KEYS.attendance).filter((item) => item.participantId !== participantId));
+      try {
+        await writeCollection(STORAGE_KEYS.participants, readCollection(STORAGE_KEYS.participants).filter((item) => item.participantId !== participantId));
+        await writeCollection(STORAGE_KEYS.registrations, readCollection(STORAGE_KEYS.registrations).filter((item) => item.participantId !== participantId));
+        await writeCollection(STORAGE_KEYS.attendance, readCollection(STORAGE_KEYS.attendance).filter((item) => item.participantId !== participantId));
+        participantMessage = '';
+      } catch (error) { participantMessage = error.message; }
       drawParticipants();
     }));
   }
@@ -376,12 +387,10 @@ function renderRegistrationsPage() {
         const registration = { registrationId: `registration_${String(registrations.length + 1).padStart(3, '0')}`, eventId, participantId, registrationDate: new Date().toISOString().slice(0, 10), status: 'Registered' };
         registrations.push(registration);
         try {
-          await writeCollection(STORAGE_KEYS.registrations, registrations, { reportError: true });
+          await writeCollection(STORAGE_KEYS.registrations, registrations);
           message = 'Registration created successfully.';
           messageType = 'success';
         } catch (error) {
-          registrations.pop();
-          writeCollection(STORAGE_KEYS.registrations, registrations);
           message = error.message;
           messageType = 'error';
         }
@@ -445,7 +454,7 @@ function renderAttendancePage() {
       const record = { attendanceId: existingIndex >= 0 ? currentAttendance[existingIndex].attendanceId : `attendance_${String(currentAttendance.length + 1).padStart(3, '0')}`, eventId: selectedEventId, participantId, status };
       if (existingIndex >= 0) currentAttendance[existingIndex] = record; else currentAttendance.push(record);
       try {
-        await writeCollection(STORAGE_KEYS.attendance, currentAttendance, { reportError: true });
+        await writeCollection(STORAGE_KEYS.attendance, currentAttendance);
         message = 'Attendance saved successfully.';
       } catch (error) {
         message = error.message;
@@ -557,23 +566,21 @@ function renderProtectedApp() {
   document.querySelector('#registrations-button').addEventListener('click', renderRegistrationsPage);
   document.querySelector('#attendance-button').addEventListener('click', renderAttendancePage);
   document.querySelector('#refresh-dashboard').addEventListener('click', renderProtectedApp);
-  document.querySelector('#add-event').addEventListener('click', () => {
+  document.querySelector('#add-event').addEventListener('click', async () => {
     const events = readCollection(STORAGE_KEYS.events);
     const nextNumber = events.length + 1;
     const date = new Date();
     date.setDate(date.getDate() + 30 + nextNumber);
     events.push({ eventId: `event_${String(nextNumber).padStart(3, '0')}`, eventName: `New Planning Session ${nextNumber}`, description: '', date: date.toISOString().slice(0, 10), time: '10:00', location: 'Main Hall', organizer: 'Admin', capacity: 20, status: 'Upcoming' });
-    writeCollection(STORAGE_KEYS.events, events);
-    renderProtectedApp();
+    try { await writeCollection(STORAGE_KEYS.events, events); renderProtectedApp(); } catch (error) { window.alert(error.message); }
   });
-  document.querySelector('#add-participant').addEventListener('click', () => {
+  document.querySelector('#add-participant').addEventListener('click', async () => {
     const participants = readCollection(STORAGE_KEYS.participants);
     const nextNumber = participants.length + 1;
     participants.push({ participantId: `participant_${String(nextNumber).padStart(3, '0')}`, name: `New Participant ${nextNumber}`, email: `participant${nextNumber}@example.com`, phone: '', organisation: 'Demo Organisation' });
-    writeCollection(STORAGE_KEYS.participants, participants);
-    renderProtectedApp();
+    try { await writeCollection(STORAGE_KEYS.participants, participants); renderProtectedApp(); } catch (error) { window.alert(error.message); }
   });
-  document.querySelector('#add-registration').addEventListener('click', () => {
+  document.querySelector('#add-registration').addEventListener('click', async () => {
     const events = readCollection(STORAGE_KEYS.events);
     const participants = readCollection(STORAGE_KEYS.participants);
     const registrations = readCollection(STORAGE_KEYS.registrations);
@@ -581,8 +588,7 @@ function renderProtectedApp() {
     const participant = participants.find((item) => !registrations.some((registration) => registration.eventId === event?.eventId && registration.participantId === item.participantId));
     if (event && participant) {
       registrations.push({ registrationId: `registration_${String(registrations.length + 1).padStart(3, '0')}`, eventId: event.eventId, participantId: participant.participantId, registrationDate: new Date().toISOString().slice(0, 10), status: 'Registered' });
-      writeCollection(STORAGE_KEYS.registrations, registrations);
-      renderProtectedApp();
+      try { await writeCollection(STORAGE_KEYS.registrations, registrations); renderProtectedApp(); } catch (error) { window.alert(error.message); }
     }
   });
 }
