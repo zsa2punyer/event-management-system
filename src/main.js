@@ -90,7 +90,7 @@ async function loadGoogleCollection(entity) {
     const records = await apiRequest({ method: 'GET', url: `${GOOGLE_SHEETS_API_URL}?entity=${entity}`, headers: {} });
     if (Array.isArray(records) && (records.length > 0 || !localStorage.getItem(STORAGE_KEYS[entity]))) {
       const normalizedRecords = entity === 'events'
-        ? records.map((record) => ({ ...record, date: String(record.date ?? '').slice(0, 10) }))
+        ? records.map((record) => ({ ...record, date: String(record.date ?? '').slice(0, 10), time: formatTime(record.time) }))
         : records;
       localStorage.setItem(STORAGE_KEYS[entity], JSON.stringify(normalizedRecords));
     }
@@ -146,6 +146,27 @@ function formatDate(value) {
   const dateValue = rawValue.includes('T') ? new Date(rawValue) : new Date(`${rawValue}T00:00:00`);
   if (Number.isNaN(dateValue.getTime())) return '—';
   return new Intl.DateTimeFormat('en', { dateStyle: 'medium' }).format(dateValue);
+}
+
+function formatTime(value) {
+  const rawValue = String(value ?? '').trim();
+  if (/^\d{2}:\d{2}$/.test(rawValue)) return rawValue;
+
+  const serializedTime = rawValue.match(/^1899-12-30T(\d{2}):(\d{2}):/);
+  if (serializedTime) {
+    const totalMinutes = (Number(serializedTime[1]) * 60 + Number(serializedTime[2]) - (8 * 60) + (24 * 60)) % (24 * 60);
+    return `${String(Math.floor(totalMinutes / 60)).padStart(2, '0')}:${String(totalMinutes % 60).padStart(2, '0')}`;
+  }
+
+  const dateValue = new Date(rawValue);
+  if (Number.isNaN(dateValue.getTime())) return rawValue;
+
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kuala_Lumpur',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(dateValue);
 }
 
 function dashboardData() {
@@ -205,7 +226,7 @@ function renderEventsPage() {
               <label class="filter-field">Status<select id="event-status">${statuses.map((status) => `<option value="${status}" ${status === statusFilter ? 'selected' : ''}>${status}</option>`).join('')}</select></label>
               <label class="filter-field">Date sorting<select id="event-sort"><option value="ascending" ${sortDirection === 'ascending' ? 'selected' : ''}>Earliest first</option><option value="descending" ${sortDirection === 'descending' ? 'selected' : ''}>Latest first</option></select></label>
             </div>
-            ${filteredEvents.length ? `<div class="table-wrap"><table><thead><tr><th>Event Name</th><th>Date</th><th>Time</th><th>Location</th><th>Capacity</th><th>Status</th><th>Registration Count</th><th>Actions</th></tr></thead><tbody>${filteredEvents.map((event) => `<tr><td><strong>${event.eventName}</strong></td><td>${formatDate(event.date)}</td><td>${event.time}</td><td>${event.location}</td><td>${event.capacity}</td><td><span class="status-badge">${event.status}</span></td><td>${eventsRegistrationCount(event.eventId)}</td><td><div class="row-actions"><button class="row-button edit-event" data-event-id="${event.eventId}" type="button">Edit</button><button class="row-button delete-event" data-event-id="${event.eventId}" type="button">Delete</button></div></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty-state"><h3>No events found</h3><p class="muted">Try changing the search or status filter.</p></div>'}
+            ${filteredEvents.length ? `<div class="table-wrap"><table><thead><tr><th>Event Name</th><th>Date</th><th>Time</th><th>Location</th><th>Capacity</th><th>Status</th><th>Registration Count</th><th>Actions</th></tr></thead><tbody>${filteredEvents.map((event) => `<tr><td><strong>${event.eventName}</strong></td><td>${formatDate(event.date)}</td><td>${formatTime(event.time)}</td><td>${event.location}</td><td>${event.capacity}</td><td><span class="status-badge">${event.status}</span></td><td>${eventsRegistrationCount(event.eventId)}</td><td><div class="row-actions"><button class="row-button edit-event" data-event-id="${event.eventId}" type="button">Edit</button><button class="row-button delete-event" data-event-id="${event.eventId}" type="button">Delete</button></div></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty-state"><h3>No events found</h3><p class="muted">Try changing the search or status filter.</p></div>'}
           </section>
         </main>
       </div>
@@ -223,7 +244,7 @@ function renderEventsPage() {
     document.querySelectorAll('.edit-event').forEach((button) => button.addEventListener('click', () => { editingEventId = button.dataset.eventId; drawEvents(); }));
     if (editingEventId) {
       const target = readCollection(STORAGE_KEYS.events).find((item) => item.eventId === editingEventId);
-      if (target) { document.querySelector('#event-edit-name').value = target.eventName; document.querySelector('#event-edit-date').value = target.date; document.querySelector('#event-edit-time').value = target.time; document.querySelector('#event-edit-location').value = target.location; document.querySelector('#event-edit-capacity').value = target.capacity; document.querySelector('#event-edit-status').value = target.status; }
+      if (target) { document.querySelector('#event-edit-name').value = target.eventName; document.querySelector('#event-edit-date').value = target.date; document.querySelector('#event-edit-time').value = formatTime(target.time); document.querySelector('#event-edit-location').value = target.location; document.querySelector('#event-edit-capacity').value = target.capacity; document.querySelector('#event-edit-status').value = target.status; }
       document.querySelector('#event-edit-form').addEventListener('submit', async (event) => { event.preventDefault(); const allEvents = readCollection(STORAGE_KEYS.events); const form = new FormData(event.currentTarget); const name = String(form.get('name') ?? document.querySelector('#event-edit-name').value).trim(); const date = document.querySelector('#event-edit-date').value; const time = document.querySelector('#event-edit-time').value; const location = document.querySelector('#event-edit-location').value.trim(); const capacity = Number(document.querySelector('#event-edit-capacity').value); if (!name || !date || !time || !location || capacity <= 0) { eventMessage = 'Complete all required event fields and use a positive capacity.'; drawEvents(); return; } const record = { eventId: editingEventId === 'new' ? `event_${String(allEvents.length + 1).padStart(3, '0')}` : editingEventId, eventName: name, description: '', date, time, location, organizer: 'Admin', capacity, status: document.querySelector('#event-edit-status').value }; const index = allEvents.findIndex((item) => item.eventId === editingEventId); const nextEvents = [...allEvents]; if (index >= 0) nextEvents[index] = { ...allEvents[index], ...record }; else nextEvents.push(record); try { await writeCollection(STORAGE_KEYS.events, nextEvents); editingEventId = ''; eventMessage = ''; } catch (error) { eventMessage = error.message; } drawEvents(); });
       document.querySelector('#cancel-event-edit').addEventListener('click', () => { editingEventId = ''; drawEvents(); });
     }
