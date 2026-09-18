@@ -88,7 +88,7 @@ async function syncFromGoogleSheets() {
 async function loadGoogleCollection(entity) {
   try {
     const records = await apiRequest({ method: 'GET', url: `${GOOGLE_SHEETS_API_URL}?entity=${entity}`, headers: {} });
-    if (Array.isArray(records) && (records.length > 0 || !localStorage.getItem(STORAGE_KEYS[entity]))) {
+    if (Array.isArray(records)) {
       const normalizedRecords = entity === 'events'
         ? records.map((record) => ({ ...record, date: String(record.date ?? '').slice(0, 10), time: formatTime(record.time) }))
         : records;
